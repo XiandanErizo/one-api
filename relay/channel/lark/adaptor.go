@@ -1,6 +1,8 @@
-package baidu
+package lark
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
@@ -8,9 +10,10 @@ import (
 	"github.com/songquanpeng/one-api/relay/constant"
 	"github.com/songquanpeng/one-api/relay/model"
 	"github.com/songquanpeng/one-api/relay/util"
+	base "github.com/volcengine/volc-sdk-golang/base"
 	"io"
+	"io/ioutil"
 	"net/http"
-	"strings"
 )
 
 type Adaptor struct {
@@ -21,46 +24,71 @@ func (a *Adaptor) Init(meta *util.RelayMeta) {
 }
 
 func (a *Adaptor) GetRequestURL(meta *util.RelayMeta) (string, error) {
-	// https://cloud.baidu.com/doc/WENXINWORKSHOP/s/clntwmv7t
-	suffix := "chat/"
-	if strings.HasPrefix("Embedding", meta.ActualModelName) {
-		suffix = "embeddings/"
+	fullRequestURL := fmt.Sprintf("%s/api/v1/chat", meta.BaseURL)
+	if meta.Mode == constant.RelayModeEmbeddings {
+		fullRequestURL = fmt.Sprintf("%s/api/v1/embeddings", meta.BaseURL)
 	}
-	switch meta.ActualModelName {
-	case "ERNIE-4.0":
-		suffix += "completions_pro"
-	case "ERNIE-Bot-4":
-		suffix += "completions_pro"
-	case "ERNIE-3.5-8K":
-		suffix += "completions"
-	case "ERNIE-Bot-8K":
-		suffix += "ernie_bot_8k"
-	case "ERNIE-Bot":
-		suffix += "completions"
-	case "ERNIE-Speed":
-		suffix += "ernie_speed"
-	case "ERNIE-Bot-turbo":
-		suffix += "eb-instant"
-	case "BLOOMZ-7B":
-		suffix += "bloomz_7b1"
-	case "Embedding-V1":
-		suffix += "embedding-v1"
-	default:
-		suffix += meta.ActualModelName
-	}
-	fullRequestURL := fmt.Sprintf("%s/rpc/2.0/ai_custom/v1/wenxinworkshop/%s", meta.BaseURL, suffix)
-	var accessToken string
-	var err error
-	if accessToken, err = GetAccessToken(meta.APIKey); err != nil {
-		return "", err
-	}
-	fullRequestURL += "?access_token=" + accessToken
 	return fullRequestURL, nil
+}
+
+type RequestBody struct {
+	Model struct {
+		Name string `json:"name"`
+	} `json:"model"`
+	Messages []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"messages"`
+	Parameters struct {
+		Temperature  float64 `json:"temperature"`
+		MaxNewTokens int     `json:"max_new_tokens"`
+	} `json:"parameters"`
+	Stream bool `json:"stream,omitempty"` // 使用omitempty，以便在stream不需要时不包含这个字段
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Request, meta *util.RelayMeta) error {
 	channel.SetupCommonRequestHeader(c, req, meta)
-	req.Header.Set("Authorization", "Bearer "+meta.APIKey)
+	credentials := base.Credentials{
+		AccessKeyID:     meta.AK,
+		SecretAccessKey: meta.SK,
+		Service:         "ml_maas",
+		Region:          "cn-beijing",
+	}
+
+	// 读取请求体
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		return err
+	}
+	// 确保在此函数结束时关闭原始的req.Body
+	defer req.Body.Close()
+
+	// 解析请求体
+	var requestBody RequestBody
+	err = json.Unmarshal(body, &requestBody)
+	if err != nil {
+		return err
+	}
+
+	// 如果是stream模式，添加stream字段
+	if meta.IsStream {
+		requestBody.Stream = true
+	}
+
+	// 重新编码为JSON
+	newBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return err
+	}
+
+	// 更新请求体
+	req.Body = ioutil.NopCloser(bytes.NewBuffer(newBody))
+	req.ContentLength = int64(len(newBody)) // 也许需要更新ContentLength
+	req.Header.Set("Content-Type", "application/json")
+
+	// 签名请求
+	credentials.Sign(req)
+
 	return nil
 }
 
@@ -101,5 +129,5 @@ func (a *Adaptor) GetModelList() []string {
 }
 
 func (a *Adaptor) GetChannelName() string {
-	return "baidu"
+	return "lark"
 }

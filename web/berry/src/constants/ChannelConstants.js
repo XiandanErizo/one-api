@@ -101,10 +101,10 @@ export const CHANNEL_OPTIONS = {
     value: 30,
     color: 'default'
   },
-  31: {
-    key: 31,
-    text: '零一万物',
-    value: 31,
+  32: {
+    key: 32,
+    text: '字节云雀',
+    value: 32,
     color: 'default'
   },
   8: {
